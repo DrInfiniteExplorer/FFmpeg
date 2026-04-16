@@ -55,6 +55,18 @@ extern int hide_banner;
 void init_dynload(void);
 
 /**
+ * Normalize argv for command-line parsing: on Windows with
+ * CommandLineToArgvW, rebuild argv from the wide command line as UTF-8;
+ * on all platforms, expand MSVC-style @responsefile arguments.
+ * Called from parse_options() and split_commandline() before options are
+ * applied (not before parse_loglevel()). Response files are therefore
+ * expanded after early log/banner handling; options that affect that pass
+ * must appear on the real argv from the shell. On Windows, a second call
+ * returns the same cached argv.
+ */
+void prepare_app_arguments(int *argc, char ***argv);
+
+/**
  * Uninitialize the cmdutils option system, in particular
  * free the *_opts contexts and their contents.
  */

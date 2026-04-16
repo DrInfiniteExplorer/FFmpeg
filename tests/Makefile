@@ -65,6 +65,10 @@ tests/data/streamgroups/%: TAG = COPY
 tests/data/streamgroups/%: $(SRC_PATH)/tests/streamgroups/% | tests/data/streamgroups
 	$(M)cp $< $@
 
+tests/data/fftools-response-%.rsp: TAG = COPY
+tests/data/fftools-response-%.rsp: $(SRC_PATH)/tests/data/fftools-response-%.rsp | tests/data
+	$(M)cp $< $@
+
 RUNNING_FATE := $(filter check fate%,$(filter-out fate-rsync,$(MAKECMDGOALS)))
 
 # Check sanity of dependencies when running FATE tests.
@@ -187,6 +191,7 @@ include $(SRC_PATH)/tests/fate/enc_external.mak
 # Must be included after lavf-video.mak
 include $(SRC_PATH)/tests/fate/ffmpeg.mak
 include $(SRC_PATH)/tests/fate/ffprobe.mak
+include $(SRC_PATH)/tests/fate/response-file.mak
 include $(SRC_PATH)/tests/fate/fifo-muxer.mak
 include $(SRC_PATH)/tests/fate/filter-audio.mak
 # Must be included after vcodec.mak
@@ -266,6 +271,8 @@ FATE_FFMPEG += $(FATE_FFMPEG-yes) $(FATE_AVCONV) $(FATE_AVCONV-yes)
 FATE-$(CONFIG_FFMPEG) += $(FATE_FFMPEG)
 FATE_FFPROBE += $(FATE_FFPROBE-yes)
 FATE-$(CONFIG_FFPROBE) += $(FATE_FFPROBE)
+FATE_RESPONSE_FILE += $(FATE_RESPONSE_FILE-yes)
+FATE-$(CONFIG_FFPROBE) += $(FATE_RESPONSE_FILE)
 FATE-$(call ALLYES, FFMPEG FFPROBE) += $(FATE_FFMPEG_FFPROBE)
 
 FATE_SAMPLES_AVCONV           += $(FATE_SAMPLES_AVCONV-yes)
@@ -284,7 +291,7 @@ RSYNC_OPTIONS = -vrltLW --timeout=60 $(RSYNC_OPTIONS-yes)
 
 $(FATE_FFMPEG) $(FATE_FFMPEG_FFPROBE) $(FATE_SAMPLES_AVCONV) $(FATE_SAMPLES_FFMPEG) $(FATE_SAMPLES_FFMPEG_FFPROBE): ffmpeg$(PROGSSUF)$(EXESUF)
 
-$(FATE_FFPROBE) $(FATE_FFMPEG_FFPROBE) $(FATE_SAMPLES_FFPROBE) $(FATE_SAMPLES_FFMPEG_FFPROBE): ffprobe$(PROGSSUF)$(EXESUF)
+$(FATE_FFPROBE) $(FATE_FFMPEG_FFPROBE) $(FATE_SAMPLES_FFPROBE) $(FATE_SAMPLES_FFMPEG_FFPROBE) $(FATE_RESPONSE_FILE): ffprobe$(PROGSSUF)$(EXESUF)
 
 $(FATE_SAMPLES_FASTSTART): tools/qt-faststart$(EXESUF)
 $(FATE_SAMPLES_DUMP_DATA) $(FATE_SAMPLES_DUMP_DATA-yes): tools/venc_data_dump$(EXESUF)

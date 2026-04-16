@@ -22,6 +22,25 @@ ffmpeg -i INPUT -/filter:v filter.script OUTPUT
 @end example
 will load a filtergraph description from the file named @file{filter.script}.
 
+@section Response files
+@cindex response file
+@cindex command line length
+
+To avoid very long shell command lines, you can pass extra arguments from a
+@dfn{response file} (MSVC-style). Any argument after the program name that
+begins with @samp{@@} followed by a file path is replaced by the contents of
+that file: tokens are separated by whitespace (spaces, tabs, or newlines), and
+a double-quoted span may contain whitespace. A backslash inside quotes escapes
+the next character. Nested response files are allowed up to 32 levels deep.
+To pass an argument that begins with a literal @samp{@@}, prefix it with another
+@samp{@@} (the first @samp{@@} is removed). This applies to @command{ffmpeg},
+@command{ffprobe}, and @command{ffplay}.
+
+Expansion happens when the main option parser runs (after startup handling
+such as @option{-loglevel}, @option{-hide_banner}, and @option{-report}).
+Those options must therefore be given on the real command line if you need
+them to apply before that stage; they are not read from response files alone.
+
 @anchor{Stream specifiers}
 @section Stream specifiers
 Some options are applied per-stream, e.g. bitrate or codec. Stream specifiers

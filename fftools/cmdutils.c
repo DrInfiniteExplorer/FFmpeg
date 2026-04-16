@@ -164,6 +164,191 @@ static const OptionDef *find_option(const OptionDef *po, const char *name)
     return po;
 }
 
+#define RESPONSE_FILE_MAX_DEPTH 5
+
+/** @return 1 if @p c is a response-file token separator (ASCII whitespace). */
+static int response_arg_sep(int c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+           c == '\f' || c == '\v';
+}
+
+/**
+ * Parse the next token from a response file body (MSVC-style).
+ * Double-quoted spans may contain whitespace; \\ and \" are escapes inside
+ * quotes.
+ *
+ * @param pp in/out pointer into file contents; advanced past the token
+ */
+static char *next_token_response(const char **pp)
+{
+    const char *p = *pp;
+    AVBPrint bp;
+    char *ret;
+    int r;
+
+    while (*p && response_arg_sep(*p))
+        p++;
+    if (!*p) {
+        *pp = p;
+        return NULL;
+    }
+
+    av_bprint_init(&bp, 0, AV_BPRINT_SIZE_UNLIMITED);
+    if (*p == '"') {
+        p++;
+        while (*p && *p != '"') {
+            if (*p == '\\' && p[1]) {
+                p++;
+                av_bprint_chars(&bp, *p++, 1);
+            } else
+                av_bprint_chars(&bp, *p++, 1);
+        }
+        if (*p == '"')
+            p++;
+    } else {
+        while (*p && !response_arg_sep(*p))
+            av_bprint_chars(&bp, *p++, 1);
+    }
+
+    *pp = p;
+    r = av_bprint_finalize(&bp, &ret);
+    return r < 0 ? NULL : ret;
+}
+
+static void append_arg(char ***argv, int *argc, char *s)
+{
+    char **p = av_realloc_array(*argv, *argc + 2, sizeof(char *));
+    if (!p) {
+        av_free(s);
+        av_log(NULL, AV_LOG_FATAL, "Out of memory\n");
+        exit(1);
+    }
+    *argv = p;
+    (*argv)[*argc] = s;
+    (*argc)++;
+    (*argv)[*argc] = NULL;
+}
+
+static void process_response_arg(char ***outv, int *outc, const char *arg,
+                                 int depth);
+
+/**
+ * Tokenize @p contents and append each token via process_response_arg().
+ *
+ * @param depth current response-file nesting depth for nested @ tokens
+ */
+static void expand_response_file_contents(char ***outv, int *outc,
+                                          const char *contents, int depth)
+{
+    const char *p = contents;
+    char *tok;
+
+    while ((tok = next_token_response(&p))) {
+        if (!*tok) {
+            av_freep(&tok);
+            continue;
+        }
+        process_response_arg(outv, outc, tok, depth);
+        av_freep(&tok);
+    }
+}
+
+/**
+ * Append one logical argv token: literal copy, @@ escape, or response file
+ * path (leading @ plus filename).
+ *
+ * @param depth nesting depth of response files already entered
+ */
+static void process_response_arg(char ***outv, int *outc, const char *arg,
+                                 int depth)
+{
+    char *contents;
+
+    if (arg[0] == '@' && arg[1] == '@') {
+        char *lit = av_strdup(arg + 1);
+        if (!lit) {
+            av_log(NULL, AV_LOG_FATAL, "Out of memory\n");
+            exit(1);
+        }
+        append_arg(outv, outc, lit);
+        return;
+    }
+    if (arg[0] == '@' && arg[1] == '\0') {
+        av_log(NULL, AV_LOG_FATAL,
+               "Invalid response file token: '@' with no path\n");
+        exit(1);
+    }
+    if (arg[0] != '@') {
+        char *copy = av_strdup(arg);
+        if (!copy) {
+            av_log(NULL, AV_LOG_FATAL, "Out of memory\n");
+            exit(1);
+        }
+        append_arg(outv, outc, copy);
+        return;
+    }
+
+    if (depth >= RESPONSE_FILE_MAX_DEPTH) {
+        av_log(NULL, AV_LOG_FATAL,
+               "Response file nesting exceeds maximum depth (%d)\n",
+               RESPONSE_FILE_MAX_DEPTH);
+        exit(1);
+    }
+
+    contents = read_file_to_string(arg + 1);
+    if (!contents) {
+        av_log(NULL, AV_LOG_FATAL,
+               "Could not read response file '%s'\n", arg + 1);
+        exit(1);
+    }
+    expand_response_file_contents(outv, outc, contents, depth + 1);
+    av_free(contents);
+}
+
+static int needs_response_expansion(int argc, char **argv)
+{
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (argv[i][0] == '@')
+            return 1;
+    }
+    return 0;
+}
+
+/**
+ * Expand MSVC-style @responsefile arguments into argv.
+ * Replaces *argc / *argv when any argument after argv[0] begins with '@'.
+ * Called from prepare_app_arguments() (parse_options / split_commandline).
+ * On failure, logs with AV_LOG_FATAL and exit(1).
+ */
+static void expand_response_files(int *argc, char ***argv)
+{
+    int i, argc_in = *argc;
+    char **argv_in = *argv;
+    char **out = NULL;
+    int outc = 0;
+
+    if (argc_in <= 1 || !needs_response_expansion(argc_in, argv_in))
+        return;
+
+    {
+        char *prog = av_strdup(argv_in[0]);
+        if (!prog) {
+            av_log(NULL, AV_LOG_FATAL, "Out of memory\n");
+            exit(1);
+        }
+        append_arg(&out, &outc, prog);
+    }
+
+    for (i = 1; i < argc_in; i++)
+        process_response_arg(&out, &outc, argv_in[i], 0);
+
+    *argc = outc;
+    *argv = out;
+}
+
 /* _WIN32 means using the windows libc - cygwin doesn't define that
  * by default. HAVE_COMMANDLINETOARGVW is true on cygwin, while
  * it doesn't provide the actual command line via GetCommandLineW(). */
@@ -172,16 +357,19 @@ static const OptionDef *find_option(const OptionDef *po, const char *name)
 /* Will be leaked on exit */
 static char** win32_argv_utf8 = NULL;
 static int win32_argc = 0;
+#endif
 
 /**
- * Prepare command line arguments for executable.
- * For Windows - perform wide-char to UTF-8 conversion.
- * Input arguments should be main() function arguments.
- * @param argc_ptr Arguments number (including executable)
- * @param argv_ptr Arguments list.
+ * Prepare argv for parse_options() / split_commandline().
+ * On Windows with CommandLineToArgvW: rebuild argv from the wide command line
+ * as UTF-8, then expand MSVC-style @responsefile tokens.
+ * Elsewhere: expand @responsefile tokens only.
+ * Not used before parse_loglevel(); see doc/fftools-common-opts.texi (section
+ * Response files). Second call on Windows returns cached argv.
  */
-static void prepare_app_arguments(int *argc_ptr, char ***argv_ptr)
+void prepare_app_arguments(int *argc_ptr, char ***argv_ptr)
 {
+#if HAVE_COMMANDLINETOARGVW && defined(_WIN32)
     char *argstr_flat;
     wchar_t **argv_w;
     int i, buffsize = 0, offset = 0;
@@ -218,15 +406,13 @@ static void prepare_app_arguments(int *argc_ptr, char ***argv_ptr)
     win32_argv_utf8[i] = NULL;
     LocalFree(argv_w);
 
+    expand_response_files(&win32_argc, &win32_argv_utf8);
     *argc_ptr = win32_argc;
     *argv_ptr = win32_argv_utf8;
-}
 #else
-static inline void prepare_app_arguments(int *argc_ptr, char ***argv_ptr)
-{
-    /* nothing to do */
+    expand_response_files(argc_ptr, argv_ptr);
+#endif
 }
-#endif /* HAVE_COMMANDLINETOARGVW */
 
 static int opt_has_arg(const OptionDef *o)
 {
